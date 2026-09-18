@@ -1,0 +1,188 @@
+"""纯函数与内部组件的单元测试（无需 OSS 凭证/网络）。
+
+端到端测试见 tests/e2e_test.sh。
+"""
+
+import io
+from datetime import datetime, timezone
+from types import SimpleNamespace
+
+import oss2
+import pytest
+from wsgidav.dav_error import DAVError
+
+from webdav_server.oss_provider import (
+    _WriteBuffer,
+    _last_modified_ts,
+    _normalize_path,
+    _OssContentReader,
+    _path_to_key,
+    _path_to_prefix,
+    _wrap_oss_error,
+)
+
+
+class TestPathHelpers:
+    @pytest.mark.parametrize(
+        "path,expected",
+        [
+            ("/", ""),
+            ("", ""),
+            ("/a/b", "a/b"),
+            ("/a/b/", "a/b"),
+            ("//a//b//", "a/b"),
+            ("/a/b.txt", "a/b.txt"),
+        ],
+    )
+    def test_normalize_path(self, path, expected):
+        assert _normalize_path(path) == expected
+
+    def test_path_to_key(self):
+        assert _path_to_key("/a/b.txt") == "a/b.txt"
+        assert _path_to_key("/") == ""
+
+    def test_path_to_prefix(self):
+        assert _path_to_prefix("/a/b") == "a/b/"
+        assert _path_to_prefix("/") == ""  # 根目录前缀为空
+        assert _path_to_prefix("/a") != "a"  # 目录前缀必须带尾斜杠
+
+
+class TestLastModifiedTs:
+    def test_int(self):
+        head = SimpleNamespace(last_modified=1_700_000_000)
+        assert _last_modified_ts(head) == 1_700_000_000.0
+
+    def test_float(self):
+        head = SimpleNamespace(last_modified=1_700_000_000.5)
+        assert _last_modified_ts(head) == 1_700_000_000.5
+
+    def test_datetime(self):
+        dt = datetime(2026, 9, 18, 12, 0, 0, tzinfo=timezone.utc)
+        head = SimpleNamespace(last_modified=dt)
+        assert _last_modified_ts(head) == dt.timestamp()
+
+    def test_rfc1123_string(self):
+        head = SimpleNamespace(last_modified="Fri, 18 Sep 2026 11:00:00 GMT")
+        assert _last_modified_ts(head) == datetime(
+            2026, 9, 18, 11, 0, 0, tzinfo=timezone.utc
+        ).timestamp()
+
+    def test_none(self):
+        assert _last_modified_ts(SimpleNamespace(last_modified=None)) is None
+
+
+class TestWriteBuffer:
+    def test_close_保留数据(self):
+        buf = _WriteBuffer()
+        buf.write(b"abc")
+        buf.close()  # WsgiDAV 会在 end_write 前调用 close
+        assert buf.getvalue() == b"abc"
+
+
+class TestWrapOssError:
+    def test_oss_error_映射为_dav_error(self):
+        @_wrap_oss_error("写入")
+        def boom():
+            raise oss2.exceptions.OssError(500, {}, b"", {"Message": "server error"})
+
+        with pytest.raises(DAVError) as exc_info:
+            boom()
+        assert "OSS 写入失败" in str(exc_info.value)
+
+    def test_dav_error_原样透传(self):
+        @_wrap_oss_error("写入")
+        def passthru():
+            raise DAVError(403, "原有错误")
+
+        with pytest.raises(DAVError) as exc_info:
+            passthru()
+        assert "原有错误" in str(exc_info.value)
+
+
+class _FakeResp:
+    def __init__(self, data):
+        self._buf = io.BytesIO(data)
+
+    def read(self, size=-1):
+        return self._buf.read(size)
+
+    def close(self):
+        self._buf.close()
+
+
+class _FakeBucket:
+    """记录 byte_range 请求并返回对应切片数据的假 bucket。"""
+
+    def __init__(self, data):
+        self.data = data
+        self.requests = []
+
+    def get_object(self, key, byte_range=None):
+        assert byte_range is not None
+        self.requests.append(byte_range)
+        start, end = byte_range
+        return _FakeResp(self.data[start : end + 1])
+
+
+class TestOssContentReader:
+    DATA = bytes(range(256)) * 10  # 2560 字节
+
+    def _make(self, size=None):
+        bucket = _FakeBucket(self.DATA)
+        reader = _OssContentReader(bucket, "k", size if size is not None else len(self.DATA))
+        return reader, bucket
+
+    def test_整读(self):
+        reader, _ = self._make()
+        assert reader.read() == self.DATA
+
+    def test_分块读(self):
+        reader, _ = self._make()
+        chunks = []
+        while True:
+            chunk = reader.read(100)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        assert b"".join(chunks) == self.DATA
+
+    def test_seek_set_后按范围请求(self):
+        reader, bucket = self._make()
+        assert reader.seek(100) == 100
+        assert reader.read(10) == self.DATA[100:110]
+        assert bucket.requests[-1] == (100, len(self.DATA) - 1)
+
+    def test_seek_cur(self):
+        reader, _ = self._make()
+        reader.read(50)
+        assert reader.seek(20, 1) == 70
+        assert reader.read(5) == self.DATA[70:75]
+
+    def test_seek_end(self):
+        reader, _ = self._make()
+        assert reader.seek(-10, 2) == len(self.DATA) - 10
+        assert reader.read() == self.DATA[-10:]
+
+    def test_seek_越界钳制到_eof(self):
+        reader, bucket = self._make()
+        assert reader.seek(10**9) == len(self.DATA)
+        assert reader.read() == b""
+        # 越界 seek 不应产生新的 OSS 请求
+        assert len(bucket.requests) == 1
+
+    def test_seek_负位置报错(self):
+        reader, _ = self._make()
+        with pytest.raises(ValueError):
+            reader.seek(-1)
+
+    def test_零字节文件(self):
+        reader, bucket = self._make(size=0)
+        assert reader.read() == b""
+        assert reader.seek(0) == 0
+        assert bucket.requests == []
+
+    def test_close_后可安全关闭(self):
+        reader, _ = self._make()
+        reader.read(10)
+        reader.close()
+        assert reader.read() == b""

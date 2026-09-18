@@ -1,0 +1,4 @@
+wsgidav>=4.3
+cheroot
+oss2
+python-dotenv
