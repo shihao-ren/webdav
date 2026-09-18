@@ -3,6 +3,8 @@
 set -u
 B=${1:-http://127.0.0.1:8080}
 U=${2:?需要传入 user:pass}
+# 挂载前缀（子路径部署时 PROPFIND 返回的 href 带此前缀，如 /webdav）
+PREFIX=$(python3 -c "from urllib.parse import urlparse; print(urlparse('$B').path.rstrip('/'))")
 
 PASS=0; FAIL=0
 TMP=$(mktemp -d)
@@ -60,10 +62,10 @@ check "MOVE 后文件跟随"   200 "$(curl -s -u $U -o /dev/null -w '%{http_code
 
 echo "== 目录列举 =="
 LIST=$(curl -s -u $U -X PROPFIND -H 'Depth: 1' $B/t1 | grep -oE '<[a-z0-9]+:href>[^<]*</[a-z0-9]+:href>')
-for expect in "/t1/" "/t1/note.txt" "/t1/note-moved.txt"; do
+for expect in "$PREFIX/t1/" "$PREFIX/t1/note.txt" "$PREFIX/t1/note-moved.txt"; do
     echo "$LIST" | grep -qF "<ns0:href>$expect</ns0:href>" && { PASS=$((PASS+1)); printf '  ✓ 列出 %-28s\n' "$expect"; } || { FAIL=$((FAIL+1)); printf '  ✗ 未列出 %s\n' "$expect"; }
 done
-CN_HREF=$(python3 -c "import urllib.parse; print(urllib.parse.quote('/t1/中文 文件.txt', safe='/'))")
+CN_HREF=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1] + '/t1/中文 文件.txt', safe='/'))" "$PREFIX")
 echo "$LIST" | grep -qF "<ns0:href>$CN_HREF</ns0:href>" && { PASS=$((PASS+1)); printf '  ✓ 列出 %-28s\n' "$CN_HREF"; } || { FAIL=$((FAIL+1)); printf '  ✗ 未列出 %s\n' "$CN_HREF"; }
 COUNT=$(echo "$LIST" | wc -l)
 [[ $COUNT -eq 4 ]] && { PASS=$((PASS+1)); echo "  ✓ 成员数量正确 (4)"; } || { FAIL=$((FAIL+1)); echo "  ✗ 成员数量 $COUNT，期望 4"; }

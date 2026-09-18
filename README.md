@@ -47,6 +47,8 @@ cp .env.example .env   # 修改用户名/密码等配置
           limit_req zone=webdav burst=20 nodelay;
           proxy_pass http://127.0.0.1:8080;
           proxy_set_header Host $host;
+          proxy_cache off;              # 若全局配置开启了 proxy_cache 必须关掉：
+                                        # 否则 nginx 会剥掉 If-Modified-Since 等条件头并缓存 WebDAV 响应
           client_max_body_size 1024m;   # 允许大文件上传
       }
   }
