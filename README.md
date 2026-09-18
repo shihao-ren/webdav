@@ -1,11 +1,15 @@
 # WebDAV 服务
 
+> **English**: A WebDAV server based on [WsgiDAV](https://github.com/mar10/wsgidav) with pluggable storage backends — local disk or **Aliyun OSS** (directories emulated via object key prefixes). Pure Python, no Docker. Originally built for **Zotero attachment sync**, works with any WebDAV client. Single-user Basic Auth. Ships with unit tests (pytest) and a full end-to-end test script. Personal project — provided as-is, use at your own risk.
+
 基于 [WsgiDAV](https://github.com/mar10/wsgidav) 的 WebDAV 服务器，支持两种存储后端：
 
 - **local（默认）**：文件存服务器本地磁盘
 - **oss**：文件存阿里云 OSS（通过对象 key 前缀模拟目录）
 
-纯 Python 实现，无需 Docker，`run.sh` 一键启动。
+纯 Python 实现，无需 Docker，`run.sh` 一键启动。典型用途：**Zotero 附件同步**（替代官方存储/坚果云），也兼容任意 WebDAV 客户端。
+
+> 个人项目，按现状提供，请自行评估风险后使用。
 
 ## 快速开始
 
@@ -77,9 +81,9 @@ Description=WebDAV Server
 After=network.target
 
 [Service]
-WorkingDirectory=/home/hirsh/project-new/webdav
-EnvironmentFile=/home/hirsh/project-new/webdav/.env
-ExecStart=/home/hirsh/project-new/webdav/venv/bin/python -m webdav_server.server
+WorkingDirectory=/opt/webdav
+EnvironmentFile=/opt/webdav/.env
+ExecStart=/opt/webdav/venv/bin/python -m webdav_server.server
 Restart=always
 
 [Install]
