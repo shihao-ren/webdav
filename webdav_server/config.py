@@ -30,6 +30,9 @@ class Config:
     backend = (_get("WEBDAV_BACKEND", "local") or "local").lower()
     root = _get("WEBDAV_ROOT", "./data") or "./data"
 
+    # 反向代理子路径挂载（如 nginx location /webdav/），留空表示根路径挂载
+    mount_path = _get("WEBDAV_MOUNT_PATH")
+
     # OSS 配置
     oss_access_key_id = _get("OSS_ACCESS_KEY_ID")
     oss_access_key_secret = _get("OSS_ACCESS_KEY_SECRET")
@@ -46,6 +49,11 @@ class Config:
             raise RuntimeError(
                 "缺少必需配置 WEBDAV_PASSWORD，请在 .env 文件中设置（参考 .env.example）"
             )
+        if cls.mount_path:
+            if not cls.mount_path.startswith("/") or cls.mount_path.endswith("/"):
+                raise RuntimeError(
+                    f"WEBDAV_MOUNT_PATH 必须以 / 开头且不以 / 结尾，当前为 {cls.mount_path!r}"
+                )
         if cls.backend not in ("local", "oss"):
             raise RuntimeError(f"WEBDAV_BACKEND 必须是 local 或 oss，当前为 {cls.backend!r}")
         if cls.backend == "oss":

@@ -47,6 +47,8 @@ def build_app(provider):
             "user_mapping": {"*": {Config.username: {"password": Config.password}}}
         },
     }
+    if Config.mount_path:
+        config["mount_path"] = Config.mount_path
     return WsgiDAVApp(config)
 
 
