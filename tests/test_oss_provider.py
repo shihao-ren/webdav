@@ -18,6 +18,7 @@ from webdav_server.oss_provider import (
     _OssContentReader,
     _path_to_key,
     _path_to_prefix,
+    _with_prefix,
     _wrap_oss_error,
 )
 
@@ -45,6 +46,29 @@ class TestPathHelpers:
         assert _path_to_prefix("/a/b") == "a/b/"
         assert _path_to_prefix("/") == ""  # 根目录前缀为空
         assert _path_to_prefix("/a") != "a"  # 目录前缀必须带尾斜杠
+
+
+class TestWithPrefix:
+    def test_no_root_returns_rel(self):
+        assert _with_prefix("", "a/b.txt") == "a/b.txt"
+        assert _with_prefix("", "") == ""
+
+    def test_root(self):
+        assert _with_prefix("kg-viewer-backups", "a/b.txt") == "kg-viewer-backups/a/b.txt"
+        assert _with_prefix("kg-viewer-backups", "") == "kg-viewer-backups"
+
+    def test_root_slashes_trimmed(self):
+        assert _with_prefix("/kg-viewer-backups/", "a") == "kg-viewer-backups/a"
+
+    def test_prefix_helper(self):
+        # 目录前缀纯函数 _dir_prefix：相对路径 + 虚拟根 -> 完整前缀（根加尾斜杠）
+        from webdav_server.oss_provider import _dir_prefix
+
+        assert _dir_prefix("", "/a/b") == "a/b/"
+        assert _dir_prefix("", "/") == ""              # 无虚拟根时根为 ''
+        assert _dir_prefix("root", "/a/b") == "root/a/b/"
+        assert _dir_prefix("root/", "/a/b") == "root/a/b/"   # 虚拟根去首尾斜杠
+        assert _dir_prefix("root", "/") == "root/"     # 虚拟根目录带尾斜杠
 
 
 class TestLastModifiedTs:

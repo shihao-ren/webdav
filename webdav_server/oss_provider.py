@@ -42,6 +42,31 @@ def _path_to_prefix(path):
     return key + "/" if key else ""
 
 
+def _with_prefix(root, rel):
+    """把相对 key/前缀拼到虚拟根前缀下。
+
+    root 去首尾斜杠后作为前缀：'kg-viewer-backups' + 'a/b.txt' -> 'kg-viewer-backups/a/b.txt'；
+    root 为空则原样返回 rel（未启用虚拟根时保持旧行为）。
+    """
+    root = root.strip("/")
+    if not root:
+        return rel
+    return f"{root}/{rel}" if rel else root
+
+
+def _dir_prefix(root, path):
+    """DAV 路径 -> 完整目录前缀（拼上虚拟根，含尾斜杠）。
+
+    有 root_prefix 时：根路径 '/' -> 'root/'；'/a/b' -> 'root/a/b/'。
+    无 root_prefix 时等价于 _path_to_prefix。
+    """
+    root = root.strip("/")
+    rel = _path_to_prefix(path)
+    if not root:
+        return rel
+    return f"{root}/{rel}" if rel else f"{root}/"
+
+
 def _wrap_oss_error(desc):
     """OSS 写操作统一错误包装装饰器（OssError -> 500 DAVError）。"""
 
@@ -77,14 +102,29 @@ def _last_modified_ts(head_result):
 
 
 class OssProvider(DAVProvider):
-    """把 Bucket 包装成 WsgiDAV 的 DAVProvider。"""
+    """把 Bucket 包装成 WsgiDAV 的 DAVProvider。
 
-    def __init__(self, auth, endpoint, bucket_name):
+    root_prefix 为虚拟根前缀（去首尾斜杠）：只暴露桶内该前缀下的子树，
+    用于给不同服务分配各自独立、互不可见的前缀。留空则暴露整个桶（旧行为）。
+    """
+
+    def __init__(self, auth, endpoint, bucket_name, root_prefix=""):
         super().__init__()
         self.bucket = oss2.Bucket(auth, endpoint, bucket_name)
         self._bucket_name = bucket_name
+        self.root_prefix = root_prefix.strip("/")
         # 启动时验证连通性，配置错误尽早失败
         self.bucket.get_bucket_info()
+
+    # -- 路径换算（DAV path <-> 完整对象 key/prefix）---------------------
+
+    def _file_key(self, path):
+        """DAV 路径 '/a/b.txt' -> 完整对象 key（拼上 root_prefix）。"""
+        return _with_prefix(self.root_prefix, _normalize_path(path))
+
+    def _dir_prefix(self, path):
+        """DAV 路径 -> 完整目录前缀（拼上 root_prefix，含尾斜杠）。"""
+        return _dir_prefix(self.root_prefix, path)
 
     # -- 工具方法 ---------------------------------------------------------
 
@@ -112,8 +152,9 @@ class OssProvider(DAVProvider):
 
     def is_collection_path(self, path):
         """该路径是否为（已存在的）目录。根目录恒为 True。"""
-        prefix = _path_to_prefix(path)
-        if not prefix:
+        prefix = self._dir_prefix(path)
+        if not prefix or (self.root_prefix and _normalize_path(path) == ""):
+            # 根目录（整桶根或虚拟根）恒为 True
             return True
         if self.head_object(prefix) is not None:
             return True
@@ -123,7 +164,7 @@ class OssProvider(DAVProvider):
         return False
 
     def is_file_path(self, path):
-        return self.head_object(_path_to_key(path)) is not None
+        return self.head_object(self._file_key(path)) is not None
 
     def delete_prefix(self, prefix):
         """递归删除前缀下所有对象（含目录标记）。"""
@@ -170,14 +211,15 @@ class OssCollection(_OssResourceMixin, DAVCollection):
 
     @property
     def _prefix(self):
-        return _path_to_prefix(self.path)
+        # 完整目录前缀（含 root_prefix）：'root/a/b/' 或虚拟根 'root/'
+        return self.provider._dir_prefix(self.path)
 
     def get_member_names(self):
         prefix = self._prefix
         names = []
         for obj in oss2.ObjectIteratorV2(self._bucket, prefix=prefix, delimiter="/"):
             if obj.is_prefix():
-                # 子目录：去掉前缀与末尾斜杠
+                # 子目录：去掉完整前缀与末尾斜杠
                 names.append(obj.key[len(prefix) :].rstrip("/"))
             elif obj.key != prefix:
                 names.append(obj.key[len(prefix) :])
@@ -205,7 +247,7 @@ class OssCollection(_OssResourceMixin, DAVCollection):
 
     def copy_move_single(self, dest_path, *, is_move):
         # 非递归语义：只创建目标目录标记，成员由调用方逐个处理
-        dest_prefix = _path_to_prefix(dest_path)
+        dest_prefix = self.provider._dir_prefix(dest_path)
         if dest_prefix:
             self._put_object(dest_prefix, b"")
 
@@ -290,7 +332,7 @@ class OssFile(_OssResourceMixin, DAVNonCollection):
 
     def __init__(self, path, environ):
         super().__init__(path, environ)
-        self._key = _path_to_key(path)
+        self._key = self.provider._file_key(path)
         self._head = None
         self._write_buf = None
 
@@ -339,7 +381,7 @@ class OssFile(_OssResourceMixin, DAVNonCollection):
         self._delete_object(self._key)
 
     def copy_move_single(self, dest_path, *, is_move):
-        dest_key = _path_to_key(dest_path)
+        dest_key = self.provider._file_key(dest_path)
         self._copy_object(self._key, dest_key)
 
     @_wrap_oss_error("写入")
