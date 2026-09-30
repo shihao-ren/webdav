@@ -8,6 +8,7 @@ OSS 没有真正的目录概念，这里用对象 key 的前缀模拟目录：
 """
 
 import io
+import logging
 import time
 
 import oss2
@@ -19,6 +20,8 @@ from wsgidav.dav_error import (
 )
 from wsgidav.dav_provider import DAVCollection, DAVNonCollection, DAVProvider
 from wsgidav.util import join_uri
+
+logger = logging.getLogger(__name__)
 
 _NO_SUCH_KEY = oss2.exceptions.NoSuchKey
 # 可重试的瞬时错误：限流与 5xx
@@ -77,7 +80,9 @@ def _wrap_oss_error(desc):
             except DAVError:
                 raise
             except oss2.exceptions.OssError as e:
-                raise DAVError(HTTP_INTERNAL_ERROR, f"OSS {desc}失败: {e}")
+                # 细节（bucket/endpoint/key）只进日志，对外文案中性，防信息泄露
+                logger.warning("OSS %s 失败: %s", desc, e)
+                raise DAVError(HTTP_INTERNAL_ERROR, f"OSS {desc}失败")
 
         return wrapper
 
@@ -145,9 +150,10 @@ class OssProvider(DAVProvider):
                 ):
                     time.sleep(0.5 * (attempt + 1))
                     continue
+                logger.warning("OSS head_object 失败(不可重试): %s", e)
                 raise DAVError(
                     HTTP_SERVICE_UNAVAILABLE,
-                    f"OSS 暂时不可用（head_object {key!r}）: {e}",
+                    "OSS 暂时不可用",
                 )
 
     def is_collection_path(self, path):
@@ -242,7 +248,8 @@ class OssCollection(_OssResourceMixin, DAVCollection):
         try:
             self.provider.delete_prefix(self._prefix)
         except oss2.exceptions.OssError as e:
-            raise DAVError(HTTP_INTERNAL_ERROR, f"OSS 删除失败: {e}")
+            logger.warning("OSS 删除前缀失败: %s", e)
+            raise DAVError(HTTP_INTERNAL_ERROR, "OSS 删除失败")
         return None  # 无错误
 
     def copy_move_single(self, dest_path, *, is_move):
@@ -340,7 +347,8 @@ class OssFile(_OssResourceMixin, DAVNonCollection):
         if self._head is None:
             self._head = self.provider.head_object(self._key)
             if self._head is None:
-                raise DAVError(HTTP_INTERNAL_ERROR, f"对象不存在: {self._key}")
+                logger.warning("对象不存在(可能刚被删除): %s", self._key)
+                raise DAVError(HTTP_INTERNAL_ERROR, "对象不存在")
         return self._head
 
     def get_content_length(self):

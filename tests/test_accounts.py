@@ -21,51 +21,82 @@ class TestMountRealm:
 
 
 class TestParseAccounts:
+    @staticmethod
+    def _write(tmp_path, content, mode=0o600):
+        p = tmp_path / "a.json"
+        p.write_text(content)
+        p.chmod(mode)
+        return p
+
     def test_missing_file_returns_none(self, tmp_path):
         assert _parse_accounts(str(tmp_path / "none.json")) is None
 
     def test_empty_object_returns_none(self, tmp_path):
-        p = tmp_path / "a.json"
-        p.write_text("{}")
+        p = self._write(tmp_path, "{}")
         assert _parse_accounts(str(p)) is None
 
     def test_valid(self, tmp_path):
-        p = tmp_path / "a.json"
-        p.write_text(
+        p = self._write(
+            tmp_path,
             '{"admin":{"password":"x","prefix":""},'
-            '"kv":{"password":"y","prefix":"kg-viewer-backups"}}'
+            '"kv":{"password":"y","prefix":"kg-viewer-backups"}}',
         )
         a = _parse_accounts(str(p))
         assert a["admin"] == {"password": "x", "prefix": ""}
         assert a["kv"] == {"password": "y", "prefix": "kg-viewer-backups"}
 
     def test_prefix_slashes_trimmed(self, tmp_path):
-        p = tmp_path / "a.json"
-        p.write_text('{"u":{"password":"p","prefix":"/x/"}}')
+        p = self._write(tmp_path, '{"u":{"password":"p","prefix":"/x/"}}')
         assert _parse_accounts(str(p))["u"]["prefix"] == "x"
 
     def test_missing_password_raises(self, tmp_path):
-        p = tmp_path / "a.json"
-        p.write_text('{"u":{"prefix":"x"}}')
+        p = self._write(tmp_path, '{"u":{"prefix":"x"}}')
         with pytest.raises(RuntimeError):
             _parse_accounts(str(p))
 
     def test_empty_password_raises(self, tmp_path):
-        p = tmp_path / "a.json"
-        p.write_text('{"u":{"password":"","prefix":"x"}}')
+        p = self._write(tmp_path, '{"u":{"password":"","prefix":"x"}}')
         with pytest.raises(RuntimeError):
             _parse_accounts(str(p))
 
     def test_prefix_with_slash_raises(self, tmp_path):
-        p = tmp_path / "a.json"
-        p.write_text('{"u":{"password":"p","prefix":"a/b"}}')
+        p = self._write(tmp_path, '{"u":{"password":"p","prefix":"a/b"}}')
         with pytest.raises(RuntimeError):
             _parse_accounts(str(p))
 
     def test_top_level_not_object_raises(self, tmp_path):
-        p = tmp_path / "a.json"
-        p.write_text("[1, 2]")
+        p = self._write(tmp_path, "[1, 2]")
         with pytest.raises(RuntimeError):
+            _parse_accounts(str(p))
+
+    def test_rejects_dot_prefix(self, tmp_path):
+        for bad in (".", "..", "a/../b"):
+            p = self._write(tmp_path, f'{{"u":{{"password":"p","prefix":"{bad}"}}}}')
+            with pytest.raises(RuntimeError, match="prefix"):
+                _parse_accounts(str(p))
+
+    def test_rejects_uppercase_prefix(self, tmp_path):
+        p = self._write(tmp_path, '{"u":{"password":"p","prefix":"Data"}}')
+        with pytest.raises(RuntimeError, match="prefix"):
+            _parse_accounts(str(p))
+
+    def test_rejects_special_chars(self, tmp_path):
+        p = self._write(tmp_path, '{"u":{"password":"p","prefix":"vault backups"}}')
+        with pytest.raises(RuntimeError, match="prefix"):
+            _parse_accounts(str(p))
+
+    def test_same_prefix_multi_accounts_ok(self, tmp_path):
+        p = self._write(
+            tmp_path,
+            '{"a":{"password":"p1","prefix":"obsidian"},'
+            '"b":{"password":"p2","prefix":"obsidian"}}',
+        )
+        a = _parse_accounts(str(p))
+        assert a["a"]["prefix"] == a["b"]["prefix"] == "obsidian"
+
+    def test_permissive_mode_raises(self, tmp_path):
+        p = self._write(tmp_path, '{"u":{"password":"p","prefix":"x"}}', mode=0o644)
+        with pytest.raises(RuntimeError, match="0600"):
             _parse_accounts(str(p))
 
 

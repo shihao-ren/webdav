@@ -112,6 +112,8 @@ class TestWrapOssError:
         with pytest.raises(DAVError) as exc_info:
             boom()
         assert "OSS 写入失败" in str(exc_info.value)
+        # M3：对外错误文案中性，不泄漏 OSS 细节
+        assert "server error" not in str(exc_info.value)
 
     def test_dav_error_原样透传(self):
         @_wrap_oss_error("写入")

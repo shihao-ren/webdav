@@ -6,6 +6,8 @@
 
 import json
 import os
+import re
+import stat as _stat
 
 from dotenv import load_dotenv
 
@@ -16,6 +18,29 @@ def _get(name, default=""):
     return os.environ.get(name, default).strip()
 
 
+# WsgiDAV 路由按小写匹配：前缀若含大写，不同大小写会折叠成同一租户。
+# 强制 [a-z0-9-]（小写字母数字连字符）同时杜绝 . / .. 穿越与大小写折叠。
+_PREFIX_RE = re.compile(r"[a-z0-9][a-z0-9-]*")
+
+
+def _assert_accounts_file_safe(path):
+    """账号文件必须 600（owner rw，他人不可读）；内含明文密码。"""
+    try:
+        st = os.stat(path)
+    except OSError:
+        raise RuntimeError(f"账号文件不可读：{path!r}")
+    mode = _stat.S_IMODE(st.st_mode)
+    if mode & 0o077:  # group/other 有任何权限位
+        raise RuntimeError(
+            f"账号文件 {path!r} 权限过于宽松（{mode:04o}），"
+            f"必须为 0600（chmod 600 {path}）。内含明文密码。"
+        )
+    if st.st_uid != os.getuid():
+        raise RuntimeError(
+            f"账号文件 {path!r} 属主不是当前服务用户，建议 0600 且属主改为服务用户。"
+        )
+
+
 def _parse_accounts(path):
     """解析 accounts 账号文件，返回 {user: {'password':…, 'prefix':…}}。
 
@@ -24,6 +49,7 @@ def _parse_accounts(path):
     """
     if not os.path.exists(path):
         return None
+    _assert_accounts_file_safe(path)
     with open(path, encoding="utf-8") as f:
         raw = json.load(f)
     if not isinstance(raw, dict):
@@ -42,8 +68,11 @@ def _parse_accounts(path):
         prefix = str(conf.get("prefix", "")).strip().strip("/")
         if not password:
             raise RuntimeError(f"账号 {user!r} 缺少非空 password")
-        if "/" in prefix:
-            raise RuntimeError(f"账号 {user!r} 的 prefix 不允许含斜杠：{prefix!r}")
+        if prefix and not _PREFIX_RE.fullmatch(prefix):
+            raise RuntimeError(
+                f"账号 {user!r} 的 prefix {prefix!r} 非法：必须为小写字母/数字/连字符"
+                f"（不含 /、.、..、空格、大写），如 kg-viewer-backups"
+            )
         accounts[user] = {"password": password, "prefix": prefix}
     return accounts
 

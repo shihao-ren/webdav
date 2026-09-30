@@ -1,4 +1,6 @@
 .env
+accounts.json
+conf/
 data/
 venv/
 __pycache__/
