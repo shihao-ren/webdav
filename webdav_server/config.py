@@ -108,6 +108,15 @@ class Config:
     oss_endpoint = _get("OSS_ENDPOINT")
     oss_bucket = _get("OSS_BUCKET")
 
+    # 单次上传大小上限（字节，默认 1 GiB，0=不限制）。超限的 PUT 直接拒绝（DoS 防护）
+    try:
+        max_upload_size = int(_get("WEBDAV_MAX_UPLOAD_SIZE", "1073741824"))
+    except ValueError:
+        raise RuntimeError(
+            "WEBDAV_MAX_UPLOAD_SIZE 必须是整数（字节），"
+            f"当前为 {_get('WEBDAV_MAX_UPLOAD_SIZE')!r}"
+        )
+
     @classmethod
     def validate(cls):
         if cls.accounts is None:
@@ -127,6 +136,10 @@ class Config:
                 )
         if cls.backend not in ("local", "oss"):
             raise RuntimeError(f"WEBDAV_BACKEND 必须是 local 或 oss，当前为 {cls.backend!r}")
+        if cls.max_upload_size < 0:
+            raise RuntimeError(
+                f"WEBDAV_MAX_UPLOAD_SIZE 不能为负数，当前为 {cls.max_upload_size}"
+            )
         if cls.backend == "oss":
             missing = [
                 name

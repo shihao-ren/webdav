@@ -39,7 +39,10 @@ def _provider_for(prefix):
             f"请改用 https://：{endpoint.replace('http://', 'https://', 1)}"
         )
     auth = oss2.Auth(Config.oss_access_key_id, Config.oss_access_key_secret)
-    return OssProvider(auth, endpoint, Config.oss_bucket, root_prefix=prefix)
+    return OssProvider(
+        auth, endpoint, Config.oss_bucket,
+        root_prefix=prefix, max_upload_size=Config.max_upload_size,
+    )
 
 
 def build_provider_mapping(accounts):

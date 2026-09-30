@@ -16,6 +16,7 @@ from wsgidav.dav_error import (
     DAVError,
     HTTP_FORBIDDEN,
     HTTP_INTERNAL_ERROR,
+    HTTP_REQUEST_ENTITY_TOO_LARGE,
     HTTP_SERVICE_UNAVAILABLE,
 )
 from wsgidav.dav_provider import DAVCollection, DAVNonCollection, DAVProvider
@@ -113,11 +114,13 @@ class OssProvider(DAVProvider):
     用于给不同服务分配各自独立、互不可见的前缀。留空则暴露整个桶（旧行为）。
     """
 
-    def __init__(self, auth, endpoint, bucket_name, root_prefix=""):
+    def __init__(self, auth, endpoint, bucket_name, root_prefix="", max_upload_size=None):
         super().__init__()
         self.bucket = oss2.Bucket(auth, endpoint, bucket_name)
         self._bucket_name = bucket_name
         self.root_prefix = root_prefix.strip("/")
+        # 单次上传大小上限（字节），None=不限制（DoS 防护，见 _WriteBuffer）
+        self.max_upload_size = max_upload_size
         # 启动时验证连通性，配置错误尽早失败
         self.bucket.get_bucket_info()
 
@@ -264,7 +267,25 @@ class OssCollection(_OssResourceMixin, DAVCollection):
 
 
 class _WriteBuffer(io.BytesIO):
-    """WsgiDAV 在 end_write 之前会 close 写入流，改为保留数据由 end_write 上传。"""
+    """WsgiDAV 在 end_write 之前会 close 写入流，改为保留数据由 end_write 上传。
+
+    max_size 用于 DoS 防护：累计写入超过上限即抛 413 并打失败标记，
+    end_write 不再把半截数据上传（防止畸形请求撑爆内存）。
+    """
+
+    def __init__(self, max_size=None):
+        super().__init__()
+        self._max = max_size
+        self._written = 0
+        self._failed = False
+
+    def write(self, b):
+        if self._max is not None:
+            self._written += len(b)
+            if self._written > self._max:
+                self._failed = True
+                raise DAVError(HTTP_REQUEST_ENTITY_TOO_LARGE, "上传内容超限")
+        return super().write(b)
 
     def close(self):
         pass  # 数据在 end_write 中读取，真正释放靠丢弃引用
@@ -370,8 +391,18 @@ class OssFile(_OssResourceMixin, DAVNonCollection):
         return True
 
     def begin_write(self, *, content_type=None):
-        # 简单实现：整体缓冲后一次性上传
-        self._write_buf = _WriteBuffer()
+        # 简单实现：整体缓冲后一次性上传。
+        # Content-Length 预检（能在分配内存前拒绝）；chunked/未知长度由 _WriteBuffer 兜底。
+        limit = self.provider.max_upload_size
+        if limit:
+            cl = self.environ.get("CONTENT_LENGTH")
+            try:
+                length = int(cl) if cl else None
+            except (TypeError, ValueError):
+                length = None
+            if length is not None and length > limit:
+                raise DAVError(HTTP_REQUEST_ENTITY_TOO_LARGE, "上传内容超限")
+        self._write_buf = _WriteBuffer(limit)
         return self._write_buf
 
     def support_recursive_move(self, dest_path):
@@ -381,7 +412,8 @@ class OssFile(_OssResourceMixin, DAVNonCollection):
     def end_write(self, *, with_errors):
         if self._write_buf is None:
             return
-        if not with_errors:
+        # 写入中途超限/出错（_failed）时丢弃半截数据，不向 OSS 上传
+        if not with_errors and not self._write_buf._failed:
             self._put_object(self._key, self._write_buf.getvalue())
         self._write_buf = None
 

@@ -12,6 +12,7 @@ import pytest
 from wsgidav.dav_error import DAVError
 
 from webdav_server.oss_provider import (
+    OssFile,
     _WriteBuffer,
     _last_modified_ts,
     _normalize_path,
@@ -21,6 +22,7 @@ from webdav_server.oss_provider import (
     _with_prefix,
     _wrap_oss_error,
 )
+from wsgidav.dav_error import HTTP_REQUEST_ENTITY_TOO_LARGE
 
 
 class TestPathHelpers:
@@ -101,6 +103,93 @@ class TestWriteBuffer:
         buf.write(b"abc")
         buf.close()  # WsgiDAV 会在 end_write 前调用 close
         assert buf.getvalue() == b"abc"
+
+    def test_超限抛413并打失败标记(self):
+        buf = _WriteBuffer(max_size=5)
+        with pytest.raises(DAVError) as ei:
+            buf.write(b"0123456")  # 6 > 5
+        assert ei.value.value == HTTP_REQUEST_ENTITY_TOO_LARGE
+        assert buf._failed
+
+    def test_分块累计超限(self):
+        buf = _WriteBuffer(max_size=4)
+        buf.write(b"ab")
+        with pytest.raises(DAVError):
+            buf.write(b"cde")  # 累计 5 > 4
+        assert buf._failed
+
+    def test_未超限不触发(self):
+        buf = _WriteBuffer(max_size=10)
+        buf.write(b"hello")
+        assert not buf._failed
+        assert buf.getvalue() == b"hello"
+
+    def test_无上限兼容(self):
+        buf = _WriteBuffer()
+        buf.write(b"x" * 100)
+        assert buf.getvalue() == b"x" * 100
+
+
+def _fake_provider(max_upload_size):
+    return SimpleNamespace(
+        max_upload_size=max_upload_size,
+        _file_key=lambda p: p.strip("/"),
+        bucket=SimpleNamespace(
+            put_object=lambda *a, **k: _FakeRecordingBucket.calls.append(
+                (a, k)
+            ),
+        ),
+    )
+
+
+class _FakeRecordingBucket:
+    calls = []
+
+
+class TestBeginWriteLimit:
+    """begin_write 的 Content-Length 预检（DoS 防护）。"""
+
+    def _open(self, environ):
+        f = OssFile("/x.txt", environ)
+        return f
+
+    def test_content_length_超限拒绝(self):
+        prov = _fake_provider(5)
+        f = OssFile("/x.txt", {"wsgidav.provider": prov, "CONTENT_LENGTH": "99"})
+        with pytest.raises(DAVError) as ei:
+            f.begin_write()
+        assert ei.value.value == HTTP_REQUEST_ENTITY_TOO_LARGE
+        assert f._write_buf is None  # 未分配缓冲
+
+    def test_content_length_在限内放行(self):
+        prov = _fake_provider(5)
+        f = OssFile("/x.txt", {"wsgidav.provider": prov, "CONTENT_LENGTH": "3"})
+        buf = f.begin_write()
+        assert buf is not None
+
+    def test_未声明长度由缓冲兜底(self):
+        prov = _fake_provider(5)
+        f = OssFile("/x.txt", {"wsgidav.provider": prov})  # 无 CONTENT_LENGTH
+        assert f.begin_write() is not None
+
+    def test_无限制时预检放行(self):
+        prov = _fake_provider(None)
+        f = OssFile("/x.txt", {"wsgidav.provider": prov, "CONTENT_LENGTH": "999"})
+        assert f.begin_write() is not None
+
+
+class TestEndWriteFailed:
+    """写入中途超限（_failed）时 end_write 不得上传半截数据。"""
+
+    def test_failed_不上传(self):
+        _FakeRecordingBucket.calls.clear()
+        prov = _fake_provider(5)
+        f = OssFile("/x.txt", {"wsgidav.provider": prov})
+        buf = _WriteBuffer(max_size=5)
+        buf._failed = True
+        f._write_buf = buf
+        f.end_write(with_errors=False)  # 即便 with_errors=False 也不上传
+        assert _FakeRecordingBucket.calls == []
 
 
 class TestWrapOssError:
