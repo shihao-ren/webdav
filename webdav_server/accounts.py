@@ -10,7 +10,7 @@ WsgiDAV 的 SimpleDomainController 以挂载路径（share_path）作为 realm �
 def mount_realm_of(prefix):
     """前缀 -> 挂载路径（默认直接作为 realm）。
 
-    ''(桶根) -> '/'; 'kg-viewer-backups' -> '/kg-viewer-backups'。
+    ''(桶根) -> '/'; 'svc-a-backups' -> '/svc-a-backups'。
     """
     p = (prefix or "").strip("/")
     return "/" + p if p else "/"
@@ -26,10 +26,10 @@ def build_user_mapping(accounts):
 
     >>> u = build_user_mapping({
     ...     "admin": {"password": "a", "prefix": ""},
-    ...     "kgviewer": {"password": "k", "prefix": "kg-viewer-backups"},
+    ...     "svc-a": {"password": "k", "prefix": "svc-a-backups"},
     ...     "vault": {"password": "v", "prefix": "vault-backups"},
     ... })
-    >>> u["/kg-viewer-backups"] == {"kgviewer": {"password": "k"},
+    >>> u["/svc-a-backups"] == {"svc-a": {"password": "k"},
     ...                              "admin": {"password": "a"}}
     True
     >>> u["/vault-backups"] == {"vault": {"password": "v"},

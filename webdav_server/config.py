@@ -71,7 +71,7 @@ def _parse_accounts(path):
         if prefix and not _PREFIX_RE.fullmatch(prefix):
             raise RuntimeError(
                 f"账号 {user!r} 的 prefix {prefix!r} 非法：必须为小写字母/数字/连字符"
-                f"（不含 /、.、..、空格、大写），如 kg-viewer-backups"
+                f"（不含 /、.、..、空格、大写），如 svc-a-backups"
             )
         accounts[user] = {"password": password, "prefix": prefix}
     return accounts

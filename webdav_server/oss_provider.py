@@ -49,7 +49,7 @@ def _path_to_prefix(path):
 def _with_prefix(root, rel):
     """把相对 key/前缀拼到虚拟根前缀下。
 
-    root 去首尾斜杠后作为前缀：'kg-viewer-backups' + 'a/b.txt' -> 'kg-viewer-backups/a/b.txt'；
+    root 去首尾斜杠后作为前缀：'svc-a-backups' + 'a/b.txt' -> 'svc-a-backups/a/b.txt'；
     root 为空则原样返回 rel（未启用虚拟根时保持旧行为）。
     """
     root = root.strip("/")

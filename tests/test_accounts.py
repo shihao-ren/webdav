@@ -14,10 +14,10 @@ class TestMountRealm:
         assert accounts.mount_realm_of(None) == "/"
 
     def test_normal(self):
-        assert accounts.mount_realm_of("vault-backups") == "/vault-backups"
+        assert accounts.mount_realm_of("svc-b-backups") == "/svc-b-backups"
 
     def test_slashes_trimmed(self):
-        assert accounts.mount_realm_of("/kg-viewer-backups/") == "/kg-viewer-backups"
+        assert accounts.mount_realm_of("/svc-a-backups/") == "/svc-a-backups"
 
 
 class TestParseAccounts:
@@ -39,11 +39,11 @@ class TestParseAccounts:
         p = self._write(
             tmp_path,
             '{"admin":{"password":"x","prefix":""},'
-            '"kv":{"password":"y","prefix":"kg-viewer-backups"}}',
+            '"kv":{"password":"y","prefix":"svc-a-backups"}}',
         )
         a = _parse_accounts(str(p))
         assert a["admin"] == {"password": "x", "prefix": ""}
-        assert a["kv"] == {"password": "y", "prefix": "kg-viewer-backups"}
+        assert a["kv"] == {"password": "y", "prefix": "svc-a-backups"}
 
     def test_prefix_slashes_trimmed(self, tmp_path):
         p = self._write(tmp_path, '{"u":{"password":"p","prefix":"/x/"}}')
@@ -103,28 +103,28 @@ class TestParseAccounts:
 class TestBuildUserMapping:
     ACCOUNTS = {
         "admin": {"password": "a", "prefix": ""},
-        "kgviewer": {"password": "k", "prefix": "kg-viewer-backups"},
-        "vault": {"password": "v", "prefix": "vault-backups"},
+        "svc-a": {"password": "k", "prefix": "svc-a-backups"},
+        "svc-b": {"password": "v", "prefix": "svc-b-backups"},
     }
 
     def test_service_realm_isolated_plus_admin(self):
         u = accounts.build_user_mapping(self.ACCOUNTS)
-        assert u["/kg-viewer-backups"] == {
-            "kgviewer": {"password": "k"},
+        assert u["/svc-a-backups"] == {
+            "svc-a": {"password": "k"},
             "admin": {"password": "a"},
         }
-        assert "vault" not in u["/kg-viewer-backups"]
+        assert "svc-b" not in u["/svc-a-backups"]
 
     def test_root_realm_has_admin_only(self):
         u = accounts.build_user_mapping(self.ACCOUNTS)
         assert u["/"] == {"admin": {"password": "a"}}
-        assert "kgviewer" not in u["/"]
+        assert "svc-a" not in u["/"]
 
     def test_no_admin(self):
         u = accounts.build_user_mapping(
-            {"kgviewer": {"password": "k", "prefix": "kg-viewer-backups"}}
+            {"svc-a": {"password": "k", "prefix": "svc-a-backups"}}
         )
-        assert u["/kg-viewer-backups"] == {"kgviewer": {"password": "k"}}
+        assert u["/svc-a-backups"] == {"svc-a": {"password": "k"}}
 
     def test_admin_is_full_on_all_realms(self):
         u = accounts.build_user_mapping(self.ACCOUNTS)

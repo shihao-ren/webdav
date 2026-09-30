@@ -56,11 +56,11 @@ class TestWithPrefix:
         assert _with_prefix("", "") == ""
 
     def test_root(self):
-        assert _with_prefix("kg-viewer-backups", "a/b.txt") == "kg-viewer-backups/a/b.txt"
-        assert _with_prefix("kg-viewer-backups", "") == "kg-viewer-backups"
+        assert _with_prefix("svc-a-backups", "a/b.txt") == "svc-a-backups/a/b.txt"
+        assert _with_prefix("svc-a-backups", "") == "svc-a-backups"
 
     def test_root_slashes_trimmed(self):
-        assert _with_prefix("/kg-viewer-backups/", "a") == "kg-viewer-backups/a"
+        assert _with_prefix("/svc-a-backups/", "a") == "svc-a-backups/a"
 
     def test_prefix_helper(self):
         # 目录前缀纯函数 _dir_prefix：相对路径 + 虚拟根 -> 完整前缀（根加尾斜杠）
